@@ -1,0 +1,87 @@
+// Starting speeds and feeds for ncSender plugins, by material: the chip
+// each tooth takes grows with the bit up to a cap; feed = RPM x flutes x
+// chip. From QuickCut's lib/starting-feeds.cjs (which followed ncCAM's
+// src/core/tools.js), so every plugin starts from the same numbers.
+//
+// Plain ES5 on purpose: build.mjs pastes it into dist/ for plugins whose
+// config.html can't load modules.
+
+// rpm: the starting spindle speed. chip: mm per tooth per mm of bit
+// diameter, up to maxChip. minChip: the least chip a deep pass may ease to
+// (a thinner one rubs and burns). stepdown, stepover: shares of the bit's
+// diameter. ramp: a ramp-in angle in degrees. wood: compression bits apply.
+// keepChip: a thinner chip melts or rubs, so Conservative keeps it.
+export var MATERIALS = {
+  softwood: { name: 'Softwood', note: 'Pine, cedar', rpm: 18000, chip: 0.012, maxChip: 0.25, minChip: 0.05, stepdown: 0.5, stepover: 0.45, ramp: 5, wood: true },
+  hardwood: { name: 'Hardwood', note: 'Oak, maple, walnut', rpm: 18000, chip: 0.009, maxChip: 0.2, minChip: 0.05, stepdown: 0.35, stepover: 0.4, ramp: 4, wood: true },
+  mdf: { name: 'MDF / Plywood', note: 'Sheet goods', rpm: 18000, chip: 0.012, maxChip: 0.25, minChip: 0.05, stepdown: 0.5, stepover: 0.45, ramp: 5, wood: true },
+  hdpe: { name: 'HDPE', note: 'Cutting boards, UHMW', rpm: 15000, chip: 0.02, maxChip: 0.25, stepdown: 0.3, stepover: 0.4, ramp: 3, keepChip: true },
+  acrylic: { name: 'Acrylic', note: 'Cast or extruded', rpm: 16000, chip: 0.015, maxChip: 0.2, stepdown: 0.3, stepover: 0.4, ramp: 3, keepChip: true },
+  polycarbonate: { name: 'Polycarbonate', note: 'Lexan', rpm: 16000, chip: 0.018, maxChip: 0.22, stepdown: 0.3, stepover: 0.4, ramp: 3, keepChip: true },
+  aluminum: { name: 'Aluminum', note: '6061', rpm: 18000, chip: 0.0045, maxChip: 0.06, stepdown: 0.1, stepover: 0.25, ramp: 2, keepChip: true },
+  foam: { name: 'Foam', note: 'Tooling board', rpm: 12000, chip: 0.02, maxChip: 0.4, minChip: 0.05, stepdown: 1, stepover: 0.6, ramp: 10 }
+};
+
+export function startingFeeds(bitMm, flutes, material, limits, style, deep) {
+  // By material (MATERIALS): the chip each tooth takes grows with the bit
+  // up to a cap; feed = RPM x flutes x chip; plunge 30% of the feed; depth per pass and stepover a
+  // share of the bit. HDPE takes a thick chip (a thin one melts it),
+  // polycarbonate one between it and acrylic's, aluminum a small one.
+  // limits: the machine's max feed ($110/$111), max Z rate for the plunge ($112) and
+  // spindle range ($30/$31), when known.
+  // style: 'conservative' slows the feed x0.75, even when the machine's max holds it,
+  // except where a thin chip melts or rubs (keepChip); 'aggressive' speeds it x1.25, up
+  // to the material's chip limit and the machine's max. Depth per pass and stepover
+  // x0.75 / x1.2. 'average' (or none) leaves them as is. RPM stays.
+  // deep (optional): { depthMm: Total Depth, stepMm: a Depth of Cut typed by
+  // hand, compression: a compression bit, fluteMm: its flute length, which
+  // no pass goes deeper than }. In
+  // wood (sheet goods are what it's for), a compression bit cuts in the
+  // fewest equal passes no deeper than its flutes or 3x its diameter, 2x
+  // under 6 mm and 1x under 3 mm, where a long pass snaps it, and 1x from
+  // 9.5 mm (3/8") unless Aggressive, where a full-depth pass asks more of
+  // the spindle and the machine than most hobby ones have (its down-cut
+  // top only cleans the face once a pass is past its up-cut tip). A pass
+  // deeper than the bit is wide
+  // loads and bends it: the chip comes down a little, to 87.5% at 2x and
+  // 75% at 3x and past (in wood, heat from a thin chip matters more than
+  // the bend), but not under the material's least chip (minChip, mm, by
+  // the style: a thinner one rubs and burns), nor where a thin chip melts
+  // (keepChip).
+  var m = MATERIALS[material] || MATERIALS.mdf, L = limits || {};
+  var S = { conservative: { chip: 0.75, cut: 0.75 }, aggressive: { chip: 1.25, cut: 1.2 } }[style] || { chip: 1, cut: 1 };
+  var rpm = Math.round(Math.min(L.maxRpm || 24000, Math.max(L.minRpm || 0, m.rpm)));
+  // The feed starts at most 4000 mm/min (or the machine's max, if less).
+  // A bit whose chip needs more at that RPM turns slower instead, so the
+  // chip stays the material's (a thin chip rubs and burns), down to
+  // 12000 RPM or the spindle's minimum (below it a hobby
+  // spindle's torque falls off); one that still needs more there,
+  // a surfacing bit, say, gets it, up to the machine's max feed ($110).
+  var cut = Math.min(m.maxChip, m.chip * bitMm), n = flutes || 2;
+  var startFeed = Math.min(L.maxFeed || 4000, 4000), slowest = Math.min(rpm, Math.max(L.minRpm || 0, 12000));
+  var rpmLowered = rpm * n * cut > startFeed && rpm > slowest;
+  if (rpmLowered) rpm = Math.max(slowest, Math.round(startFeed / (n * cut) / 100) * 100);
+  var maxFeed = rpm <= slowest && rpm * n * cut > startFeed ? Math.max(startFeed, L.maxFeed || 0) : startFeed;
+  var perRev = rpm * n;
+  var avg = Math.min(maxFeed, perRev * cut);
+  var raw = S.chip < 1 ? avg * (m.keepChip ? 1 : S.chip) : perRev * Math.min(m.maxChip, m.chip * bitMm * S.chip);
+  var D = deep || {}, step = Math.max(0.05, bitMm * m.stepdown * S.cut), passes = 0;
+  if (D.compression && m.wood && D.depthMm > 0 && bitMm > 0) {
+    var times = bitMm >= 9.5 && style !== 'aggressive' ? 1 : bitMm >= 6 ? 3 : bitMm >= 3 ? 2 : 1;
+    var most = Math.min(D.fluteMm > 0 ? D.fluteMm : Infinity, times * bitMm);
+    passes = Math.max(1, Math.ceil(D.depthMm / most - 1e-9));
+    step = D.depthMm / passes;
+  }
+  // No pass deeper than the flutes, when the tool table gives them.
+  if (D.fluteMm > 0) step = Math.min(step, D.fluteMm);
+  var pass = D.stepMm > 0 ? D.stepMm : step, ratio = bitMm > 0 ? pass / bitMm : 0;
+  // deepChip: how much the deep pass took off the feed, after the caps.
+  var shallow = Math.min(maxFeed, Math.max(150, raw));
+  if (!m.keepChip && ratio > 1 && raw > 0) {
+    var eased = raw * Math.max(0.75, 1 - 0.125 * (ratio - 1)), least = Math.min(raw, perRev * (m.minChip || 0) * S.chip);
+    raw = Math.max(eased, least);
+  }
+  var exact = Math.min(maxFeed, Math.max(150, raw)), feed = Math.round(exact), deepChip = exact / shallow;
+  return { rpm: rpm, chipMm: exact / perRev, feedMm: feed, capped: raw > maxFeed, maxFeedMm: maxFeed, rpmLowered: rpmLowered, deepChip: deepChip, passes: passes,
+           plungeMm: Math.round(Math.min(L.maxPlunge || Infinity, startFeed * 0.3, Math.max(60, feed * 0.3))), stepMm: step, stepoverPct: Math.round(Math.min(0.9, m.stepover * S.cut) * 100) };
+}

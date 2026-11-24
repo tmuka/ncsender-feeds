@@ -1,0 +1,34 @@
+{
+  "name": "ncsender-feeds",
+  "version": "0.1.0",
+  "description": "Starting speeds and feeds for ncSender plugins: by material, bit and flutes, within the machine's limits",
+  "type": "module",
+  "main": "./dist/feeds.cjs",
+  "module": "./src/feeds.js",
+  "exports": {
+    ".": {
+      "import": "./src/feeds.js",
+      "require": "./dist/feeds.cjs"
+    },
+    "./global": "./dist/feeds.global.js"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs --check && node --test tests/"
+  },
+  "author": "Tony Muka",
+  "license": "GPL-3.0",
+  "keywords": [
+    "ncsender",
+    "cnc",
+    "feeds",
+    "speeds",
+    "chipload"
+  ]
+}

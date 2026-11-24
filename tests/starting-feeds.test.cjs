@@ -1,0 +1,217 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+// From QuickCut's tests/starting-feeds.test.cjs (the same function).
+const { startingFeeds, MATERIALS } = require('../dist/feeds.cjs');
+
+test('a 1/4" 2-flute bit in MDF: 18000 RPM, chip 0.0762 mm, plunge 30%', () => {
+  const f = startingFeeds(6.35, 2, 'mdf');
+  assert.equal(f.rpm, 18000);
+  assert.ok(Math.abs(f.chipMm - 0.0762) < 1e-9);
+  assert.equal(f.feedMm, 2743);
+  assert.equal(f.plungeMm, 823);
+  assert.equal(f.capped, false);
+  assert.ok(Math.abs(f.stepMm - 3.175) < 1e-9);
+});
+
+test('the chip is capped for big bits, and the feed by the machine', () => {
+  const big = startingFeeds(25, 2, 'aluminum');
+  assert.equal(big.chipMm, 0.06);
+  const fast = startingFeeds(12, 4, 'mdf', { maxFeed: 2500 });
+  assert.equal(fast.feedMm, 2500);
+  assert.equal(fast.capped, true);
+  assert.equal(startingFeeds(12, 4, 'mdf').feedMm, 4000);
+});
+
+test('spindle range and minimum feeds', () => {
+  assert.equal(startingFeeds(6, 2, 'mdf', { maxRpm: 12000 }).rpm, 12000);
+  assert.equal(startingFeeds(6, 2, 'foam', { minRpm: 15000 }).rpm, 15000);
+  const tiny = startingFeeds(0.5, 1, 'aluminum');
+  assert.equal(tiny.feedMm, 150);
+  assert.equal(tiny.plungeMm, 60);
+  assert.equal(startingFeeds(6, 1, 'mdf').feedMm * 2 - startingFeeds(6, 2, 'mdf').feedMm, 0);
+});
+
+test('an unknown material is read as MDF', () => {
+  assert.deepEqual(startingFeeds(6, 2, 'balsa'), startingFeeds(6, 2, 'mdf'));
+});
+
+test('every material has what the formula and a material menu need', () => {
+  assert.deepEqual(Object.keys(MATERIALS),
+    ['softwood', 'hardwood', 'mdf', 'hdpe', 'acrylic', 'polycarbonate', 'aluminum', 'foam']);
+  for (const [k, m] of Object.entries(MATERIALS)) {
+    for (const f of ['name', 'rpm', 'chip', 'maxChip', 'stepdown', 'stepover', 'ramp']) {
+      assert.ok(m[f] !== undefined && m[f] !== '', `${k}.${f}`);
+    }
+    assert.ok(m.wood || m.keepChip || m.minChip > 0, `${k}: a deep pass needs minChip or keepChip`);
+  }
+});
+
+test('the pasted copy sets NcFeeds with the same function', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ctx = {};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'dist', 'feeds.global.js'), 'utf8'), ctx);
+  const same = (a, b) => assert.equal(JSON.stringify(a), JSON.stringify(b));
+  same(ctx.NcFeeds.startingFeeds(6.35, 2, 'mdf', {}, 'aggressive'), startingFeeds(6.35, 2, 'mdf', {}, 'aggressive'));
+  assert.equal(ctx.NcFeeds.MATERIALS.hdpe.name, 'HDPE');
+});
+
+test('stepover by material', () => {
+  assert.equal(startingFeeds(6, 2, 'mdf').stepoverPct, 45);
+  assert.equal(startingFeeds(6, 1, 'aluminum').stepoverPct, 25);
+});
+
+test('feeds style: average is as before; conservative and aggressive scale the feed, depth of cut and stepover', () => {
+  assert.deepEqual(startingFeeds(6.35, 2, 'mdf', null, 'average'), startingFeeds(6.35, 2, 'mdf'));
+  const avg = startingFeeds(6.35, 2, 'hardwood'), con = startingFeeds(6.35, 2, 'hardwood', null, 'conservative'), agg = startingFeeds(6.35, 2, 'hardwood', null, 'aggressive');
+  assert.equal(con.rpm, avg.rpm);
+  assert.ok(Math.abs(con.chipMm - avg.chipMm * 0.75) < 1e-12 && Math.abs(agg.chipMm - avg.chipMm * 1.25) < 1e-12);
+  assert.equal(con.feedMm, Math.round(avg.chipMm * 0.75 * 18000 * 2));
+  assert.ok(Math.abs(con.stepMm - avg.stepMm * 0.75) < 1e-12 && Math.abs(agg.stepMm - avg.stepMm * 1.2) < 1e-12);
+  assert.equal(agg.stepoverPct, 48);
+  assert.equal(con.plungeMm, Math.round(con.feedMm * 0.3));
+  // Still within the machine: the feed cap holds, and stepover stops at 90 %.
+  assert.equal(startingFeeds(12, 4, 'mdf', { maxFeed: 2500 }, 'aggressive').feedMm, 2500);
+  assert.equal(startingFeeds(6, 2, 'foam', null, 'aggressive').stepoverPct, 72);
+});
+
+test('conservative slows the feed even when the machine max holds it', () => {
+  const avg = startingFeeds(12.7, 2, 'mdf', { maxFeed: 2500 }), con = startingFeeds(12.7, 2, 'mdf', { maxFeed: 2500 }, 'conservative');
+  assert.equal(avg.feedMm, 2500);
+  assert.equal(avg.capped, true);
+  assert.equal(con.feedMm, 1875);
+  assert.equal(con.capped, false);
+  // The chip shown is the one the held feed cuts, not the formula's: the
+  // spindle came down to 12000 RPM for it first.
+  assert.equal(avg.rpm, 12000);
+  assert.ok(Math.abs(avg.chipMm - 2500 / 24000) < 1e-12);
+});
+
+test('conservative keeps the chip where a thin one melts or rubs: plastics and aluminum', () => {
+  for (const m of ['hdpe', 'acrylic', 'polycarbonate', 'aluminum']) {
+    const avg = startingFeeds(3.175, 2, m), con = startingFeeds(3.175, 2, m, null, 'conservative');
+    assert.equal(con.feedMm, avg.feedMm, m);
+    assert.ok(Math.abs(con.stepMm - avg.stepMm * 0.75) < 1e-12, m);
+  }
+});
+
+test('aggressive stops at the material chip limit', () => {
+  assert.ok(Math.abs(startingFeeds(30, 2, 'aluminum', null, 'aggressive').chipMm - 0.06) < 1e-12);
+  assert.ok(startingFeeds(12.7, 1, 'hdpe', null, 'aggressive').chipMm <= 0.25 + 1e-12);
+});
+
+test('the plunge stays within the Z max rate ($112)', () => {
+  assert.equal(startingFeeds(6.35, 2, 'mdf', { maxPlunge: 500 }).plungeMm, 500);
+  assert.equal(startingFeeds(6.35, 2, 'mdf', { maxPlunge: 5000 }).plungeMm, 823);
+});
+
+test('deep passes: a compression bit cuts in the fewest passes its flutes and 3x its diameter allow', () => {
+  // 1/4" in 3/4" plywood: one full-depth pass, at 3x the bit.
+  const q = startingFeeds(6.35, 2, 'mdf', null, null, { compression: true, depthMm: 19.05, fluteMm: 22 });
+  assert.equal(q.passes, 1);
+  assert.ok(Math.abs(q.stepMm - 19.05) < 1e-9);
+  // 1/8" at the same depth: a small bit goes no deeper than 2x a pass, so three of 6.35.
+  const e = startingFeeds(3.175, 2, 'mdf', null, null, { compression: true, depthMm: 19.05, fluteMm: 12.7 });
+  assert.equal(e.passes, 3);
+  assert.ok(Math.abs(e.stepMm - 6.35) < 1e-9);
+  // 1/16": 1x.
+  assert.equal(startingFeeds(1.5875, 2, 'mdf', null, null, { compression: true, depthMm: 6.35 }).passes, 4);
+  // Short flutes take more passes.
+  assert.equal(startingFeeds(6.35, 2, 'mdf', null, null, { compression: true, depthMm: 19.05, fluteMm: 9 }).passes, 3);
+  // Not a compression bit: Depth of Cut as before.
+  assert.ok(Math.abs(startingFeeds(6.35, 2, 'mdf', null, null, { depthMm: 19.05 }).stepMm - 3.175) < 1e-9);
+});
+
+test('deep passes ease the chip a little, not under the style\'s least chip, nor in plastics', () => {
+  const base = startingFeeds(6.35, 2, 'mdf');
+  // 2x the bit: 87.5% of 0.0762 mm.
+  const two = startingFeeds(6.35, 2, 'mdf', null, null, { stepMm: 12.7 });
+  assert.ok(Math.abs(two.chipMm - 0.0762 * 0.875) < 1e-4);
+  // 3x and past: 75%, 0.0572 mm (2057 mm/min), over the 0.05 least.
+  const three = startingFeeds(6.35, 2, 'mdf', null, null, { stepMm: 19.05 });
+  assert.equal(three.feedMm, 2057);
+  assert.equal(startingFeeds(6.35, 2, 'mdf', null, null, { stepMm: 30 }).feedMm, 2057);
+  // The styles stay apart at full depth: 1543 / 2057 / 2572 mm/min.
+  const full = (style) => startingFeeds(6.35, 2, 'mdf', null, style, { compression: true, depthMm: 19.05, fluteMm: 25.4 }).feedMm;
+  assert.deepEqual([full('conservative'), full('average'), full('aggressive')], [1543, 2057, 2572]);
+  // The least chip follows the style: a conservative 1/4" bit eased to
+  // 0.0429 mm stays over its 0.0375 least.
+  assert.ok(startingFeeds(6.35, 2, 'mdf', null, 'conservative', { stepMm: 19.05 }).chipMm > 0.0375);
+  // A small bit whose chip is already under the least keeps it.
+  assert.equal(startingFeeds(3.175, 2, 'mdf', null, null, { stepMm: 9.525 }).feedMm, startingFeeds(3.175, 2, 'mdf').feedMm);
+  // Up to 1x the bit, nothing changes.
+  assert.equal(startingFeeds(6.35, 2, 'mdf', null, null, { stepMm: 6.35 }).feedMm, base.feedMm);
+  // Acrylic keeps its chip, a thin one melts it.
+  assert.equal(startingFeeds(6.35, 2, 'acrylic', null, null, { stepMm: 19.05 }).feedMm, startingFeeds(6.35, 2, 'acrylic').feedMm);
+});
+
+test('no pass deeper than the flutes', () => {
+  // A 2" surfacing bit with 1/2" flutes: half its width would be 24.6 mm.
+  assert.equal(startingFeeds(50.8, 3, 'mdf', null, null, { fluteMm: 12.7 }).stepMm, 12.7);
+  // Shallower than the flutes: as before.
+  assert.ok(Math.abs(startingFeeds(6.35, 2, 'mdf', null, null, { fluteMm: 25.4 }).stepMm - 3.175) < 1e-9);
+});
+
+test('compression passes are for wood only: metals and plastics keep their shallow passes', () => {
+  for (const m of ['aluminum', 'acrylic', 'hdpe', 'polycarbonate', 'foam']) {
+    const f = startingFeeds(6.35, 2, m, null, null, { compression: true, depthMm: 12, fluteMm: 25.4 });
+    assert.equal(f.passes, 0, m);
+    assert.ok(Math.abs(f.stepMm - startingFeeds(6.35, 2, m).stepMm) < 1e-9, m);
+  }
+  assert.equal(startingFeeds(6.35, 2, 'hardwood', null, null, { compression: true, depthMm: 12, fluteMm: 25.4 }).passes, 1);
+});
+
+test('deepChip is what the deep pass took off the feed, after the caps', () => {
+  // A 1/4" 4-flute, Aggressive: held at 4000 shallow (its RPM lowered for
+  // the chip); the deep pass eases it under that.
+  const f = startingFeeds(6.35, 4, 'mdf', null, 'aggressive', { stepMm: 19 });
+  assert.ok(f.feedMm < 4000);
+  assert.ok(Math.abs(f.deepChip - f.feedMm / 4000) < 1e-3);
+  // Held even deep (a 1/4" 6-flute at 12000 RPM, the slowest): nothing taken off.
+  const h = startingFeeds(6.35, 6, 'mdf', { maxFeed: 4000 }, 'aggressive', { stepMm: 7 });
+  assert.equal(h.feedMm, 4000);
+  assert.equal(h.deepChip, 1);
+  // Not held: the feed it took off.
+  const g = startingFeeds(6.35, 2, 'mdf', null, null, { stepMm: 19.05 });
+  assert.ok(Math.abs(g.deepChip - g.feedMm / startingFeeds(6.35, 2, 'mdf').feedMm) < 1e-3);
+});
+
+test('a big compression bit cuts full depth only on Aggressive', () => {
+  const half = (style) => startingFeeds(12.7, 2, 'hardwood', null, style, { compression: true, depthMm: 19.05, fluteMm: 31.75 }).passes;
+  assert.deepEqual([half('conservative'), half('average'), half('aggressive')], [2, 2, 1]);
+  // 1/4" is unchanged: full depth in every style.
+  const q = (style) => startingFeeds(6.35, 2, 'mdf', null, style, { compression: true, depthMm: 19.05, fluteMm: 25.4 }).passes;
+  assert.deepEqual([q('conservative'), q('average'), q('aggressive')], [1, 1, 1]);
+});
+
+// The Pi, 2026-11-23: a 2" 3-flute surfacing bit in MDF burned at 15000 RPM
+// and 6000 mm/min (0.133 mm a tooth); QuickCut's own start was 18000 RPM at
+// 4000 (0.074 mm), held by its 4000 mm/min starting limit.
+test('a bit whose chip needs more than the starting feed turns slower, then gets the machine\'s feed', () => {
+  for (const style of ['average', 'aggressive']) {
+    const f = startingFeeds(49.212, 3, 'mdf', { maxFeed: 15000 }, style);
+    assert.equal(f.rpm, 12000, style);
+    assert.equal(f.feedMm, 9000, style);
+    assert.ok(Math.abs(f.chipMm - 0.25) < 1e-9, style);
+    assert.equal(f.rpmLowered, true);
+    assert.equal(f.plungeMm, 1200);   // a fast feed, not a fast plunge
+    assert.equal(f.capped, false);
+  }
+  // A 1/2" bit: the feed stays at 4000, the spindle comes down for its chip.
+  const half = startingFeeds(12.7, 2, 'mdf', { maxFeed: 15000 });
+  assert.ok(half.rpm > 12000 && half.rpm < 18000 && half.feedMm <= 4000 && half.feedMm > 3900);
+  assert.ok(Math.abs(half.chipMm - 0.1524) < 0.002);
+  // Not below the spindle's minimum, nor 12000, where a hobby spindle's
+  // torque falls off (the Pi's 2.2 kW one ran this bit well at 15000).
+  assert.equal(startingFeeds(49.212, 3, 'mdf', { maxFeed: 15000, minRpm: 15000 }).rpm, 15000);
+  assert.equal(startingFeeds(49.212, 3, 'mdf', { maxFeed: 15000, minRpm: 15000 }).feedMm, 11250);
+  assert.equal(startingFeeds(19.05, 2, 'mdf', { maxFeed: 15000 }).rpm, 12000);
+  // The machine's max holds it; unknown, the 4000 starting limit does.
+  const slow = startingFeeds(49.212, 3, 'mdf', { maxFeed: 5000 });
+  assert.equal(slow.feedMm, 5000); assert.equal(slow.capped, true); assert.equal(slow.maxFeedMm, 5000);
+  assert.equal(startingFeeds(49.212, 3, 'mdf').feedMm, 4000);
+  // Small bits as before.
+  assert.deepEqual([startingFeeds(6.35, 2, 'mdf', { maxFeed: 15000 }).rpm, startingFeeds(6.35, 2, 'mdf', { maxFeed: 15000 }).feedMm], [18000, 2743]);
+  assert.equal(startingFeeds(3.175, 2, 'mdf', { maxFeed: 15000 }).rpmLowered, false);
+});
