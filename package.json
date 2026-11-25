@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node build.mjs --check && node --test tests/"
+    "test": "node build.mjs --check && node --test tests/*.test.cjs"
   },
   "author": "Tony Muka",
   "license": "GPL-3.0",
