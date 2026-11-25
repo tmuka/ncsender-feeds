@@ -11,34 +11,15 @@ that drifts.
 
 ## How it works
 
-- **Chip per tooth** grows with the bit (`chip` × diameter) up to the
-  material's `maxChip`. Feed = RPM × flutes × chip.
-- **Feed** starts at most 4000 mm/min, or the machine's max if lower. A bit
-  whose chip needs more turns the spindle slower instead (down to 12000 RPM
-  or the spindle's minimum), so the chip doesn't thin and rub; one that
-  still needs more there, a surfacing bit, say, gets the machine's max feed.
-- **Plunge** is 30 % of the feed (at least 60), within the Z axis's max rate.
-- **Depth per pass** and **stepover** are shares of the bit's diameter, and
-  no pass goes deeper than the flutes when their length is known.
-- **Style:** Conservative slows the feed × 0.75 and cuts × 0.75; Aggressive
-  pushes the chip × 1.25 (up to the material's cap) and cuts × 1.2. Plastics
-  and aluminum keep their chip on Conservative, since a thinner one melts or
-  rubs.
-- **Deep passes:** a pass deeper than the bit is wide eases the chip a
-  little, to 87.5 % at 2× and 75 % at 3×, never under the material's least
-  chip. In wood a compression bit cuts in the fewest passes its flutes and
-  diameter allow.
+Chip per tooth grows with the bit up to the material's cap; feed = RPM ×
+flutes × chip, starting at most 4000 mm/min, with the spindle slowed for big
+bits rather than thinning the chip; plunge 30 % of the feed within `$112`;
+depth per pass and stepover a share of the bit, no deeper than its flutes.
 
-| Material | RPM | Chip per mm of bit | Max chip | Pass depth | Stepover |
-|---|---|---|---|---|---|
-| Softwood | 18000 | 0.012 | 0.25 | 0.5 × D | 45 % |
-| Hardwood | 18000 | 0.009 | 0.2 | 0.35 × D | 40 % |
-| MDF / Plywood | 18000 | 0.012 | 0.25 | 0.5 × D | 45 % |
-| HDPE | 15000 | 0.02 | 0.25 | 0.3 × D | 40 % |
-| Acrylic | 16000 | 0.015 | 0.2 | 0.3 × D | 40 % |
-| Polycarbonate | 16000 | 0.018 | 0.22 | 0.3 × D | 40 % |
-| Aluminum | 18000 | 0.0045 | 0.06 | 0.1 × D | 25 % |
-| Foam | 12000 | 0.02 | 0.4 | 1 × D | 60 % |
+**[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** walks through every step,
+the assumptions behind it, every constant and why, the materials table,
+worked examples and the known gaps. Its tables are generated from the code
+and the tests fail if it falls behind, so it's the place to check the math.
 
 ## Use
 
@@ -82,10 +63,11 @@ this at run time.
   stepdown, stepover, ramp, wood, keepChip }`, in menu order. `ramp` is a
   ramp-in angle in degrees.
 
-## Develop
+## Contributing
 
-Edit `src/feeds.js`, then `npm run build` (writes `dist/`) and `npm test`
-(the tests also fail when `dist/` is out of date). Change a material here,
-not in a plugin's copy.
+A number that looks wrong for your machine or material is worth an issue.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for what to include, how to change
+the code and docs together (`npm run build`, `npm test`), and how releases
+reach the plugins.
 
 GPL-3.0, like the plugins it came from.
