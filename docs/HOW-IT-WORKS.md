@@ -263,6 +263,8 @@ Things the formula doesn't model yet. Each is a fair place to contribute.
 
 Material values and assumptions, newest first. Say what a change was based on.
 
+- **0.1.1 (2026-11-25):** documentation only (this page, CONTRIBUTING,
+  CLAUDE.md, CI). No change to the numbers.
 - **0.1.0 (2026-11-24):** the library starts from QuickCut's
   `lib/starting-feeds.cjs` as of 2026-11-23, with ncCAM's names, notes and
   ramp angles.

@@ -1,6 +1,6 @@
 {
   "name": "ncsender-feeds",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Starting speeds and feeds for ncSender plugins: by material, bit and flutes, within the machine's limits",
   "type": "module",
   "main": "./dist/feeds.cjs",
